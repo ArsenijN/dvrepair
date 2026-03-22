@@ -1514,7 +1514,18 @@ fn check_ac_bitstream(frame: &[u8]) -> u32 {
                     if br.pos >= br_limit { break; } // consumed all bits for this block
 
                     match decode_dv_vlc(&br) {
-                        None => { error = true; break; }
+                        None => {
+                            // Only flag as error if there are enough bits for a complete
+                            // codeword (min len = 3 bits) but nothing matches.
+                            // If we're near the block boundary with < 17 bits remaining
+                            // (max VLC codeword length), it's a normal partial VLC that
+                            // continues in FFmpeg's overflow buffer (pass 3). Not an error.
+                            let remaining = br_limit - br.pos;
+                            if remaining >= 17 {
+                                error = true;
+                            }
+                            break;
+                        }
                         Some((run_dec, _level, len)) => { // level unused in health check
                             br.advance(len);
                             pos += run_dec as u32;
