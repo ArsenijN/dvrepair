@@ -203,6 +203,8 @@ The raw DV frame bytes are identical in both — only the container differs.
 - [ ] `.dv` raw stream output option (in addition to AVI)
 - [ ] Majority-vote byte-level reconstruction for frames damaged in most (but not all)
       captures — combine bytes from multiple partially-healthy copies
+- [ ] Add edgecase for the different length inputs (perform previous frame(s) check 
+      over index - since latter one makes stutters)
 
 ---
 
