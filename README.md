@@ -207,3 +207,5 @@ The raw DV frame bytes are identical in both — only the container differs.
 ---
 
 *I can make 1:1 non-corrupted copies of home videos now :>*
+
+**Shoutout to the FFmpeg team for the open-source software, and for the DV VLC table (from `/libavcodec/dvdata.c`)**

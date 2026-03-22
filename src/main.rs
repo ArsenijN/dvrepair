@@ -275,10 +275,10 @@ fn is_dv_data_chunk(cc: &[u8], kind: &AviKind) -> bool {
     }
 }
 
-fn walk_movi(
+/// Collect raw frame byte regions from movi without assessment (sequential, fast).
+fn walk_movi_collect(
     data: &[u8], mut pos: usize, end: usize,
-    frames: &mut Vec<DvFrame>,
-    regions: &mut Vec<(usize, usize)>,
+    regions: &mut Vec<(usize, usize)>,  // (data_offset, size)
     kind: &mut AviKind,
     frame_size: &mut usize,
     path: &Path,
@@ -294,31 +294,76 @@ fn walk_movi(
         }
 
         if is_dv_data_chunk(cc, kind) && sz > 0 {
-            let fb = &data[ds..ds+sz];
-            // For Type-1 chunks, the chunk may be the exact DV frame size.
-            // Accept if it matches a known DV frame size.
             let valid_size = sz == 120_000 || sz == 144_000;
             if valid_size {
                 if *frame_size == 120_000 && sz == 144_000 { *frame_size = 144_000; }
-                let idx = frames.len();
-                let tc = extract_timecode(fb);
-                let (healthy, sta_errs, ac_errs) = assess_frame(fb);
                 regions.push((ds, sz));
-                frames.push(DvFrame {
-                    data: fb.to_vec(), index: idx, timecode: tc,
-                    healthy, sta_errors: sta_errs, ac_errors: ac_errs,
-                });
-            } else if sz > 0 {
+            } else {
                 debug!("{:?}: skipping chunk '{}' size {} (not a DV frame size)", path, cc_str(cc), sz);
             }
         } else if cc == b"LIST" && ds + 4 <= data.len() && &data[ds..ds+4] == b"rec " {
-            walk_movi(data, ds+4, ds+sz, frames, regions, kind, frame_size, path);
+            walk_movi_collect(data, ds+4, ds+sz, regions, kind, frame_size, path);
         }
-        // Skip audio chunks (??wb, ??__) silently.
 
         if nx <= pos { break; }
         pos = nx;
     }
+}
+
+// walk_movi kept as alias for backward compat with walk_chunks call site
+fn walk_movi(
+    data: &[u8], pos: usize, end: usize,
+    frames: &mut Vec<DvFrame>,
+    regions: &mut Vec<(usize, usize)>,
+    kind: &mut AviKind,
+    frame_size: &mut usize,
+    path: &Path,
+) {
+    // Phase 1: collect frame regions sequentially (just byte offsets, no assessment)
+    walk_movi_collect(data, pos, end, regions, kind, frame_size, path);
+
+    // Phase 2: assess all frames in parallel using std::thread::scope.
+    // Each frame is independent — embarrassingly parallel.
+    // Chunk work across available CPU threads; collect results via Vec return.
+    let n_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let n_frames = regions.len();
+
+    // Each thread returns its chunk as a Vec<(global_index, DvFrame)>.
+    let chunks: Vec<Vec<(usize, DvFrame)>> = std::thread::scope(|s| {
+        let chunk_size = (n_frames + n_threads - 1) / n_threads.max(1);
+        let chunk_size = chunk_size.max(1);
+
+        let handles: Vec<_> = regions
+            .chunks(chunk_size)
+            .enumerate()
+            .map(|(chunk_idx, chunk)| {
+                let base = chunk_idx * chunk_size;
+                s.spawn(move || {
+                    chunk.iter().enumerate().map(|(i, &(offset, size))| {
+                        let fb = &data[offset..offset + size];
+                        let tc = extract_timecode(fb);
+                        let (healthy, sta_errs, ac_errs) = assess_frame(fb);
+                        (base + i, DvFrame {
+                            data: fb.to_vec(),
+                            index: base + i,
+                            timecode: tc,
+                            healthy,
+                            sta_errors: sta_errs,
+                            ac_errors: ac_errs,
+                        })
+                    }).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    // Flatten chunks back into order (they come back in chunk order, within each
+    // chunk they're in frame order, so the final collect is already sorted).
+    frames.extend(chunks.into_iter().flatten().map(|(_, f)| f));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1786,17 +1831,31 @@ fn main() -> Result<()> {
     }
 
     info!("Loading {} files...", cli.inputs.len());
+    // Parse and assess all input files in parallel.
+    // Each file is fully independent — load + frame assessment happen concurrently.
+    let results: Vec<(PathBuf, anyhow::Result<ParsedAvi>)> =
+        std::thread::scope(|s| {
+            let handles: Vec<_> = cli.inputs
+                .iter()
+                .map(|path| {
+                    let p = path.clone();
+                    s.spawn(move || (p.clone(), parse_avi(&p)))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
     let mut loaded: Vec<(PathBuf, ParsedAvi)> = Vec::new();
-    for path in &cli.inputs {
-        info!("  {:?}", path);
-        let avi = parse_avi(path)?;
+    for (path, result) in results {
+        let avi = result?;
         let corrupt = avi.frames.iter().filter(|f| !f.healthy).count();
         let ac_only = avi.frames.iter().filter(|f| f.sta_errors == 0 && f.ac_errors > 0).count();
+        info!("  {:?}", path);
         info!("    {} frames ({:?}), {} corrupt ({:.1}%) [{} STA+dropout, {} AC-only]",
               avi.frames.len(), avi.kind, corrupt,
               if avi.frames.is_empty() { 0.0 } else { corrupt as f64 / avi.frames.len() as f64 * 100.0 },
               corrupt - ac_only, ac_only);
-        loaded.push((path.clone(), avi));
+        loaded.push((path, avi));
     }
 
     // Select main stream
