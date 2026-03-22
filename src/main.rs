@@ -262,7 +262,7 @@ fn is_dv_data_chunk(cc: &[u8], kind: &AviKind) -> bool {
     match kind {
         AviKind::Type2 => {
             // ??dc (compressed video) or ??db (uncompressed video marker, same bytes)
-            (cc[2] == b'd' && (cc[3] == b'c' || cc[3] == b'b'))
+            cc[2] == b'd' && (cc[3] == b'c' || cc[3] == b'b')  // ← 00db now covered
         }
         AviKind::Type1 => {
             // The interleaved stream chunks: typically "00__" where stream 0 carries
