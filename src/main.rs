@@ -1578,18 +1578,21 @@ fn check_ac_bitstream(frame: &[u8]) -> u32 {
                 // which is what FFmpeg's "AC EOB marker is absent pos=N" actually means.
                 // Do NOT flag pos==0 or other low values — valid sparse frames hit this.
                 
-                //if error || (pos > 0 && pos >= 64 && pos < 128) {
-                //    ac_errors += 1;
-                //}
+                if error || (pos > 0 && pos >= 64 && pos < 128) {
+                    ac_errors += 1;
+                }
 
                 // TODO: Temporarely reverted the original code logic back - since 
                 // currently it doesn't see any errors
 
-                if error || (pos >= 64 && pos < 127) {
-                    ac_errors += 1;
-                }
+                // if error || (pos >= 64 && pos < 127) {
+                //     ac_errors += 1;
+                // }
 
                 // TODO: fix the check logics
+
+                // TODO: IMMEDIATE PUSH OF FIX SINCE BY SOME REASON CODE IS BROKEN 
+                // AND DOESN'T SHOW THE ERRORS
 
                 bit_offset += block_bits;
             }
