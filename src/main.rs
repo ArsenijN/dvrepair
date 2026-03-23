@@ -1573,9 +1573,23 @@ fn check_ac_bitstream(frame: &[u8]) -> u32 {
 
                 // Mirror FFmpeg's check: error if 64 <= pos < 127
                 // (pos overran without reaching clean EOB via large-run jump)
-                if error || (pos < 64) {
+
+                // Only flag if pos overran into the ambiguous zone (64..127),
+                // which is what FFmpeg's "AC EOB marker is absent pos=N" actually means.
+                // Do NOT flag pos==0 or other low values — valid sparse frames hit this.
+                
+                //if error || (pos > 0 && pos >= 64 && pos < 128) {
+                //    ac_errors += 1;
+                //}
+
+                // TODO: Temporarely reverted the original code logic back - since 
+                // currently it doesn't see any errors
+
+                if error || (pos >= 64 && pos < 127) {
                     ac_errors += 1;
                 }
+
+                // TODO: fix the check logics
 
                 bit_offset += block_bits;
             }
