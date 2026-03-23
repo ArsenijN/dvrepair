@@ -320,6 +320,7 @@ fn walk_movi(
     path: &Path,
 ) {
     // Phase 1: collect frame regions sequentially (just byte offsets, no assessment)
+    let regions_before = regions.len();  // ← snapshot before this movi chunk's regions
     walk_movi_collect(data, pos, end, regions, kind, frame_size, path);
 
     // Phase 2: assess all frames in parallel using std::thread::scope.
@@ -328,18 +329,19 @@ fn walk_movi(
     let n_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    let n_frames = regions.len();
+    let new_regions = &regions[regions_before..];  // ← only the new ones from this call
+    let n_frames = new_regions.len();              // ← was regions.len() — the bug
 
     // Each thread returns its chunk as a Vec<(global_index, DvFrame)>.
     let chunks: Vec<Vec<(usize, DvFrame)>> = std::thread::scope(|s| {
         let chunk_size = (n_frames + n_threads - 1) / n_threads.max(1);
         let chunk_size = chunk_size.max(1);
 
-        let handles: Vec<_> = regions
+        let handles: Vec<_> = new_regions  // ← was `regions`
             .chunks(chunk_size)
             .enumerate()
             .map(|(chunk_idx, chunk)| {
-                let base = chunk_idx * chunk_size;
+                let base = regions_before + chunk_idx * chunk_size;  // ← global frame index offset
                 s.spawn(move || {
                     chunk.iter().enumerate().map(|(i, &(offset, size))| {
                         let fb = &data[offset..offset + size];
