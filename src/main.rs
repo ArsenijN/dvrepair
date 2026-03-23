@@ -493,7 +493,6 @@ fn convert_type1_to_type2(avi: &ParsedAvi, output: &Path) -> Result<()> {
     // We'll build the movi LIST and idx1 separately, then assemble.
     let mut movi_data: Vec<u8> = Vec::new();
     let mut idx1_data: Vec<u8> = Vec::new();
-    let mut movi_offset = 0u32; // will be patched after we know header size
 
     // Build movi chunks + index
     for frame in &avi.frames {
@@ -583,13 +582,6 @@ fn convert_type1_to_type2(avi: &ParsedAvi, output: &Path) -> Result<()> {
     // LIST hdrl: 8 + 4 + hdrl.len() = 12 + hdrl.len()
     // LIST movi: 8 + 4 + movi_data.len()
     // movi chunks start at: 12 + (12 + hdrl.len()) + 12 = 36 + hdrl.len()
-    movi_offset = (12 + hdrl.len() + 12) as u32; // start of movi LIST payload
-    // Patch idx1: offsets are relative to start of movi payload (after LIST movi header+type)
-    // idx1 offsets should be relative to the start of the movi LIST chunk data region.
-    // (Some players want absolute, some relative — we use relative to movi start, which is the spec.)
-    // Actually per AVI spec, idx1 offsets are relative to the start of the movi LIST chunk
-    // (i.e., the 'movi' fourcc offset). Our idx1 was built with per-chunk movi-relative offsets
-    // already, so this is correct.
 
     // Assemble full file
     let hdrl_list_size = (hdrl.len() + 4) as u32; // +4 for "hdrl" fourcc
@@ -1466,8 +1458,6 @@ struct BitReader<'a> {
 }
 
 impl<'a> BitReader<'a> {
-    fn new(data: &'a [u8]) -> Self { BitReader { data, pos: 0 } }
-
     /// Peek at next 32 bits MSB-first without advancing (zero-pads at end).
     #[inline]
     fn peek32(&self) -> u32 {
@@ -1583,7 +1573,7 @@ fn check_ac_bitstream(frame: &[u8]) -> u32 {
 
                 // Mirror FFmpeg's check: error if 64 <= pos < 127
                 // (pos overran without reaching clean EOB via large-run jump)
-                if error || (pos >= 64 && pos < 127) {
+                if error || (pos < 64) {
                     ac_errors += 1;
                 }
 
@@ -2002,5 +1992,22 @@ mod tests {
         assert!(is_dv_data_chunk(b"00__", &AviKind::Type1));
         assert!(is_dv_data_chunk(b"00dc", &AviKind::Type1));
         assert!(!is_dv_data_chunk(b"01wb", &AviKind::Type1));
+    }
+    #[test] fn assess_ac_corrupt_detected() {
+        let mut f = vec![0u8; 120_000];
+        // Write a valid-looking Video DIF block header (STA=0) but AC that never EOBs.
+        // Block 6 in seq 0 = first Video DIF block.
+        let off = 6 * DIF_BLOCK;
+        f[off] = (SCT_VIDEO << 5) | 0; // SCT=4, seq=0
+        f[off+1] = 0;
+        f[off+2] = 0;
+        f[off+3] = 0x00; // STA=0, QNO=0
+        // Fill AC payload with 0x00 — decodes as repeated (run=0, level=1) via the
+        // 3-bit code `000`, so pos never advances past 0, block ends with no EOB.
+        for b in &mut f[off+4..off+DIF_BLOCK] { *b = 0x00; }
+        let (healthy, sta, ac) = assess_frame(&f);
+        assert_eq!(sta, 0);
+        assert!(ac > 0, "AC checker should detect missing EOB, got ac={}", ac);
+        assert!(!healthy);
     }
 }
