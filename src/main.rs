@@ -1582,17 +1582,7 @@ fn check_ac_bitstream(frame: &[u8]) -> u32 {
                     ac_errors += 1;
                 }
 
-                // TODO: Temporarely reverted the original code logic back - since 
-                // currently it doesn't see any errors
-
-                // if error || (pos >= 64 && pos < 127) {
-                //     ac_errors += 1;
-                // }
-
-                // TODO: fix the check logics
-
-                // TODO: IMMEDIATE PUSH OF FIX SINCE BY SOME REASON CODE IS BROKEN 
-                // AND DOESN'T SHOW THE ERRORS
+                // TODO: Fix why exactly test fails
 
                 bit_offset += block_bits;
             }
